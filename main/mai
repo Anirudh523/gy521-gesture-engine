@@ -1,0 +1,60 @@
+#include "IMUSensor.h"
+#include "FeaturePipeline.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+static const char* TAG = "main";
+QueueHandle_t frameQueue;
+QueueHandle_t resultQueue;
+
+void sensorTask(void* pvParameters){
+IMUSensor imu;
+while(True){
+	IMUFrame frame = imu.read();
+	xQueueSend(frameQueue, &frame, portMAX_DELAY);
+	vTaskDelay(pdMS_TO_TICKS(10));
+}
+}
+
+void pipelineTask(void* pvParameters){
+FeaturePipeline<50> fp;
+IMUFrame frame;
+while(true){
+	xQueueRecieve(frameQueue, &frame, portMAX_DELAY);
+	fp.push(frame);
+	if(fp.isReady()){
+		auto features = fp.getFeatures();
+		xQueueSend(resultQueue, &features, portMAX_DELAY);
+		fp.reset();
+	}
+}
+}
+
+void outputTask(void* pvParameters){
+FeatureVector fv;
+while(true){
+	xQueueRecieve(resultQueue, &fv, portMAX_DELAY);
+	ESP_LOGI("output", "rms_ax = %.3f, mean_ax= = %.3f, zcr_ax = %.3f", fv.rms[0], fv.mean[0], fv.zcr[0]);
+}
+}
+	
+extern "C" void app_main() {
+
+IMUSensor imu; 
+FeaturePipeline<50> pipeline;
+
+
+while (true) {
+
+auto frame = imu.read();
+pipeline.push(frame);
+
+if(pipeline.isReady()){
+	auto features = pipeline.getFeatures();
+	ESP_LOGI(TAG, "rms_ax=%.3f mean_ax=%.3f zcr_ax=%.3f", features.rms[0], features.mean[0], features.zcr[0]);
+	pipeline.reset();
+}
+vTaskDelay(pdMS_TO_TICKS(100));
+}
+}
