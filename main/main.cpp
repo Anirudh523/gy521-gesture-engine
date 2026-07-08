@@ -1,10 +1,11 @@
 #include "IMUSensor.h"
-#include "FeaturePipeline.h"
+#include "InferenceEngine.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
 
+static const char* TAG = "main";
 QueueHandle_t frameQueue;
 QueueHandle_t resultQueue;
 
@@ -18,33 +19,35 @@ void sensorTask(void* pvParameters) {
 }
 
 void pipelineTask(void* pvParameters) {
-    FeaturePipeline<50> pipeline;
+    InferenceEngine engine;
     IMUFrame frame;
     while (true) {
         xQueueReceive(frameQueue, &frame, portMAX_DELAY);
-        pipeline.push(frame);
-        if (pipeline.isReady()) {
-            auto features = pipeline.getFeatures();
-            xQueueSend(resultQueue, &features, portMAX_DELAY);
-            pipeline.reset();
+        engine.push(frame);
+        if (engine.isReady()) {
+            auto result = engine.classify();
+            xQueueSend(resultQueue, &result, portMAX_DELAY);
+            engine.reset();
         }
     }
 }
 
 void outputTask(void* pvParameters) {
-    FeatureVector features;
+    InferenceResult result;
     while (true) {
-        xQueueReceive(resultQueue, &features, portMAX_DELAY);
-        ESP_LOGI("output", "rms_ax=%.3f mean_ax=%.3f zcr_ax=%.3f",
-            features.rms[0], features.mean[0], features.zcr[0]);
+        xQueueReceive(resultQueue, &result, portMAX_DELAY);
+	if(result.valid){
+		ESP_LOGI(TAG, "Gesture: %s (%.1f%%)",
+                result.label, result.confidence * 100.0f);
+    	}
     }
 }
 
 extern "C" void app_main() {
     frameQueue = xQueueCreate(10, sizeof(IMUFrame));
-    resultQueue = xQueueCreate(5, sizeof(FeatureVector));
+    resultQueue = xQueueCreate(5, sizeof(InferenceResult));
 
     xTaskCreate(sensorTask, "sensor_task", 4096, NULL, 5, NULL);
-    xTaskCreate(pipelineTask, "pipeline_task", 4096, NULL, 4, NULL);
+    xTaskCreate(pipelineTask, "pipeline_task", 8192, NULL, 4, NULL);
     xTaskCreate(outputTask, "output_task", 4096, NULL, 3, NULL);
 }
